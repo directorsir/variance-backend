@@ -12,11 +12,9 @@ app.post("/voice", (req, res) => {
   res.send(`
 <Response>
   <Say>Hello. Please tell me how I can help you.</Say>
-
   <Connect>
     <Stream url="wss://variance-backend.onrender.com/stream" />
   </Connect>
-
   <Pause length="60" />
 </Response>
   `);
@@ -28,20 +26,17 @@ app.get("/", (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-/**
- * Create HTTP server (required for WebSockets)
- */
 const server = http.createServer(app);
 
-/**
- * WebSocket server for Twilio Media Streams
- */
-const wss = new WebSocket.Server({ server, path: "/stream" });
+const wss = new WebSocket.Server({
+  server,
+  path: "/stream",
+});
 
 wss.on("connection", (twilioSocket) => {
   console.log("Twilio stream connected");
 
-let deepgramReady = false;
+  let deepgramReady = false;
 
   const deepgramSocket = new WebSocket(
     "wss://api.deepgram.com/v1/listen?model=phonecall&punctuate=true",
@@ -52,31 +47,49 @@ let deepgramReady = false;
     }
   );
 
-
   deepgramSocket.on("open", () => {
-  deepgramReady = true;
-  console.log("Deepgram connected");
+    deepgramReady = true;
+    console.log("Deepgram connected");
+  });
 
   deepgramSocket.on("message", (message) => {
-    const data = JSON.parse(message.toString());
+    let data;
+    try {
+      data = JSON.parse(message.toString());
+    } catch (e) {
+      return;
+    }
+
     const transcript =
-      data.channel?.alternatives?.[0]?.transcript;
+      data.channel &&
+      data.channel.alternatives &&
+      data.channel.alternatives[0] &&
+      data.channel.alternatives[0].transcript;
 
     if (transcript && transcript.length > 0) {
       console.log("Caller said:", transcript);
     }
   });
 
+  deepgramSocket.on("error", (err) => {
+    console.error("Deepgram error:", err.message);
+  });
+
   twilioSocket.on("message", (message) => {
-    const data = JSON.parse(message.toString());
+    let data;
+    try {
+      data = JSON.parse(message.toString());
+    } catch (e) {
+      return;
+    }
 
     if (data.event === "media" && deepgramReady) {
-  const audioBuffer = Buffer.from(
-    data.media.payload,
-    "base64"
-  );
-  deepgramSocket.send(audioBuffer);
-}
+      const audioBuffer = Buffer.from(
+        data.media.payload,
+        "base64"
+      );
+      deepgramSocket.send(audioBuffer);
+    }
   });
 
   twilioSocket.on("close", () => {
@@ -87,3 +100,4 @@ let deepgramReady = false;
 
 server.listen(PORT, () => {
   console.log("Server running on port", PORT);
+});
