@@ -7,13 +7,15 @@ app.use(express.json());
 app.post("/voice", (req, res) => {
   res.type("text/xml");
   res.send(`
-    <Response>
-      <Say>
-        Hello. This is the AI intake assistant.
-      </Say>
-    </Response>
+<Response>
+  <Say>Hello. Please tell me how I can help you.</Say>
+  <Connect>
+    <Stream url="wss://variance-backend.onrender.com/stream" />
+  </Connect>
+</Response>
   `);
 });
+
 
 app.get("/", (req, res) => {
   res.send("Backend is live.");
