@@ -37,24 +37,49 @@ const server = http.createServer(app);
 
 const wss = new WebSocket.Server({ server, path: "/stream" });
 
-wss.on("connection", (ws) => {
+wss.on("connection", (twilioSocket) => {
   console.log("Twilio stream connected");
 
-  ws.on("message", (msg) => {
+  const deepgramSocket = new WebSocket(
+    "wss://api.deepgram.com/v1/listen?model=phonecall&punctuate=true",
+    {
+      headers: {
+        Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
+      },
+    }
+  );
+
+  deepgramSocket.on("open", () => {
+    console.log("Deepgram connected");
+  });
+
+  deepgramSocket.on("message", (msg) => {
     const data = JSON.parse(msg);
+    const transcript =
+      data.channel?.alternatives?.[0]?.transcript;
 
-    if (data.event === "start") {
-      console.log("Stream started");
-    }
-
-    if (data.event === "media") {
-      console.log("Receiving audio...");
-    }
-
-    if (data.event === "stop") {
-      console.log("Stream stopped");
+    if (transcript && transcript.length > 0) {
+      console.log("Caller said:", transcript);
     }
   });
+
+  twilioSocket.on("message", (msg) => {
+    const data = JSON.parse(msg);
+
+    if (data.event === "media") {
+      const audioBuffer = Buffer.from(
+        data.media.payload,
+        "base64"
+      );
+      deepgramSocket.send(audioBuffer);
+    }
+  });
+
+  twilioSocket.on("close", () => {
+    deepgramSocket.close();
+    console.log("Twilio stream disconnected");
+  });
+});
 
   ws.on("close", () => {
     console.log("Twilio stream disconnected");
