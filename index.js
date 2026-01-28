@@ -29,12 +29,13 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 /**
- * IMPORTANT:
- * WebSockets require the HTTP server,
- * not app.listen()
+ * Create HTTP server (required for WebSockets)
  */
 const server = http.createServer(app);
 
+/**
+ * WebSocket server for Twilio Media Streams
+ */
 const wss = new WebSocket.Server({ server, path: "/stream" });
 
 wss.on("connection", (twilioSocket) => {
@@ -53,8 +54,8 @@ wss.on("connection", (twilioSocket) => {
     console.log("Deepgram connected");
   });
 
-  deepgramSocket.on("message", (msg) => {
-    const data = JSON.parse(msg);
+  deepgramSocket.on("message", (message) => {
+    const data = JSON.parse(message.toString());
     const transcript =
       data.channel?.alternatives?.[0]?.transcript;
 
@@ -63,8 +64,8 @@ wss.on("connection", (twilioSocket) => {
     }
   });
 
-  twilioSocket.on("message", (msg) => {
-    const data = JSON.parse(msg);
+  twilioSocket.on("message", (message) => {
+    const data = JSON.parse(message.toString());
 
     if (data.event === "media") {
       const audioBuffer = Buffer.from(
@@ -77,11 +78,6 @@ wss.on("connection", (twilioSocket) => {
 
   twilioSocket.on("close", () => {
     deepgramSocket.close();
-    console.log("Twilio stream disconnected");
-  });
-});
-
-  ws.on("close", () => {
     console.log("Twilio stream disconnected");
   });
 });
