@@ -41,6 +41,8 @@ const wss = new WebSocket.Server({ server, path: "/stream" });
 wss.on("connection", (twilioSocket) => {
   console.log("Twilio stream connected");
 
+let deepgramReady = false;
+
   const deepgramSocket = new WebSocket(
     "wss://api.deepgram.com/v1/listen?model=phonecall&punctuate=true",
     {
@@ -50,9 +52,10 @@ wss.on("connection", (twilioSocket) => {
     }
   );
 
+
   deepgramSocket.on("open", () => {
-    console.log("Deepgram connected");
-  });
+  deepgramReady = true;
+  console.log("Deepgram connected");
 
   deepgramSocket.on("message", (message) => {
     const data = JSON.parse(message.toString());
@@ -67,13 +70,13 @@ wss.on("connection", (twilioSocket) => {
   twilioSocket.on("message", (message) => {
     const data = JSON.parse(message.toString());
 
-    if (data.event === "media") {
-      const audioBuffer = Buffer.from(
-        data.media.payload,
-        "base64"
-      );
-      deepgramSocket.send(audioBuffer);
-    }
+    if (data.event === "media" && deepgramReady) {
+  const audioBuffer = Buffer.from(
+    data.media.payload,
+    "base64"
+  );
+  deepgramSocket.send(audioBuffer);
+}
   });
 
   twilioSocket.on("close", () => {
@@ -84,4 +87,3 @@ wss.on("connection", (twilioSocket) => {
 
 server.listen(PORT, () => {
   console.log("Server running on port", PORT);
-});
