@@ -37,9 +37,10 @@ wss.on("connection", (twilioSocket) => {
   console.log("Twilio stream connected");
 
   let deepgramReady = false;
+  let streamStarted = false;
 
   const deepgramSocket = new WebSocket(
-    "wss://api.deepgram.com/v1/listen?model=phonecall&punctuate=true",
+    "wss://api.deepgram.com/v1/listen?model=phonecall&encoding=mulaw&sample_rate=8000&punctuate=true&interim_results=true",
     {
       headers: {
         Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
@@ -83,7 +84,22 @@ wss.on("connection", (twilioSocket) => {
       return;
     }
 
-    if (data.event === "media" && deepgramReady) {
+    if (data.event === "start") {
+  streamStarted = true;
+  console.log("Twilio stream started");
+}
+
+if (
+  data.event === "media" &&
+  deepgramReady &&
+  streamStarted
+) {
+  const audioBuffer = Buffer.from(
+    data.media.payload,
+    "base64"
+  );
+  deepgramSocket.send(audioBuffer);
+} {
       const audioBuffer = Buffer.from(
         data.media.payload,
         "base64"
