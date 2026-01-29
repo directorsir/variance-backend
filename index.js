@@ -7,15 +7,13 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-app.post("/voice", (req, res) => {
-  res.type("text/xml");
-  res.send(`
+aapp.post("/voice", (req, res) => {
+  console.log("Incoming call received");
+
+  res.status(200).type("text/xml").send(`
 <Response>
-  <Say>Hello. Please tell me how I can help you.</Say>
-  <Connect>
-    <Stream url="wss://variance-backend.onrender.com/stream" />
-  </Connect>
-  <Pause length="60" />
+  <Say>Hello. Your call has been answered successfully.</Say>
+  <Pause length="10" />
 </Response>
   `);
 });
