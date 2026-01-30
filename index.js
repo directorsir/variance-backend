@@ -3,20 +3,22 @@ const http = require("http");
 const WebSocket = require("ws");
 
 const app = express();
-
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 /**
  * TWILIO VOICE WEBHOOK
- * Answers the phone and starts streaming audio
+ * This answers the call and starts audio streaming
  */
 app.post("/voice", (req, res) => {
-  console.log("Incoming call received");
+  console.log("Incoming call");
 
-  res.status(200).type("text/xml").send(`
+  res.type("text/xml").send(`
 <Response>
-  <Say>Hello. Please tell me how I can help you.</Say>
+  <Say>
+    Hello. Before we begin, I am not an attorney, and this call does not create an attorney client relationship.
+    Please tell me briefly how I can help you today.
+  </Say>
 
   <Connect>
     <Stream url="wss://variance-backend.onrender.com/stream" />
@@ -35,14 +37,23 @@ app.get("/", (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-
-/**
- * Create HTTP server (required for WebSockets)
- */
 const server = http.createServer(app);
 
 /**
- * WebSocket server for Twilio Media Streams
+ * SIMPLE BRAIN — decides what to say back
+ */
+function decideResponse(transcript) {
+  const text = transcript.toLowerCase();
+
+  if (text.includes("accident") || text.includes("crash") || text.includes("hit")) {
+    return "I’m sorry that happened. Were you physically injured in the accident?";
+  }
+
+  return "Thank you. What type of legal help are you looking for today?";
+}
+
+/**
+ * WEBSOCKET — Twilio Media Stream
  */
 const wss = new WebSocket.Server({
   server,
@@ -54,12 +65,10 @@ wss.on("connection", (twilioSocket) => {
 
   let deepgramReady = false;
   let streamStarted = false;
+  let lastResponseSent = false;
 
-  /**
-   * Connect to Deepgram
-   */
   const deepgramSocket = new WebSocket(
-    "wss://api.deepgram.com/v1/listen?model=phonecall&encoding=mulaw&sample_rate=8000&punctuate=true&interim_results=true",
+    "wss://api.deepgram.com/v1/listen?model=phonecall&encoding=mulaw&sample_rate=8000&punctuate=true",
     {
       headers: {
         Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
@@ -86,18 +95,29 @@ wss.on("connection", (twilioSocket) => {
       data.channel.alternatives[0] &&
       data.channel.alternatives[0].transcript;
 
-    if (transcript && transcript.length > 0) {
+    if (transcript && transcript.length > 0 && !lastResponseSent) {
       console.log("Caller said:", transcript);
+
+      const aiResponse = decideResponse(transcript);
+      lastResponseSent = true;
+
+      /**
+       * Tell Twilio to speak back
+       * (we close the stream and respond verbally)
+       */
+      twilioSocket.send(
+        JSON.stringify({
+          event: "mark",
+          mark: {
+            name: aiResponse,
+          },
+        })
+      );
+
+      console.log("AI response decided:", aiResponse);
     }
   });
 
-  deepgramSocket.on("error", (err) => {
-    console.error("Deepgram error:", err.message);
-  });
-
-  /**
-   * Receive audio from Twilio and forward to Deepgram
-   */
   twilioSocket.on("message", (message) => {
     try {
       const data = JSON.parse(message.toString());
@@ -113,10 +133,7 @@ wss.on("connection", (twilioSocket) => {
         streamStarted &&
         deepgramSocket.readyState === WebSocket.OPEN
       ) {
-        const audioBuffer = Buffer.from(
-          data.media.payload,
-          "base64"
-        );
+        const audioBuffer = Buffer.from(data.media.payload, "base64");
         deepgramSocket.send(audioBuffer);
       }
     } catch (err) {
@@ -132,9 +149,6 @@ wss.on("connection", (twilioSocket) => {
   });
 });
 
-/**
- * Start server
- */
 server.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
