@@ -1,14 +1,15 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
+const querystring = require("querystring");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 /**
- * TWILIO VOICE WEBHOOK
- * This answers the call and starts audio streaming
+ * ========= TWILIO ENTRY POINT =========
+ * Answers the call and starts streaming
  */
 app.post("/voice", (req, res) => {
   console.log("Incoming call");
@@ -16,7 +17,8 @@ app.post("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
   <Say>
-    Hello. Before we begin, I am not an attorney, and this call does not create an attorney client relationship.
+    Hello. Before we begin, I am not an attorney,
+    and this call does not create an attorney client relationship.
     Please tell me briefly how I can help you today.
   </Say>
 
@@ -25,6 +27,23 @@ app.post("/voice", (req, res) => {
   </Connect>
 
   <Pause length="60" />
+</Response>
+  `);
+});
+
+/**
+ * ========= AI VOICE RESPONSE =========
+ * Speaks what the AI decided
+ */
+app.post("/respond", (req, res) => {
+  const { message } = req.query;
+
+  console.log("AI speaking:", message);
+
+  res.type("text/xml").send(`
+<Response>
+  <Say>${message}</Say>
+  <Pause length="30" />
 </Response>
   `);
 });
@@ -40,20 +59,24 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 
 /**
- * SIMPLE BRAIN — decides what to say back
+ * ========= SIMPLE BRAIN =========
  */
 function decideResponse(transcript) {
   const text = transcript.toLowerCase();
 
-  if (text.includes("accident") || text.includes("crash") || text.includes("hit")) {
-    return "I’m sorry that happened. Were you physically injured in the accident?";
+  if (
+    text.includes("accident") ||
+    text.includes("crash") ||
+    text.includes("hit")
+  ) {
+    return "I am sorry that happened. Were you physically injured in the accident?";
   }
 
   return "Thank you. What type of legal help are you looking for today?";
 }
 
 /**
- * WEBSOCKET — Twilio Media Stream
+ * ========= TWILIO MEDIA STREAM =========
  */
 const wss = new WebSocket.Server({
   server,
@@ -65,7 +88,7 @@ wss.on("connection", (twilioSocket) => {
 
   let deepgramReady = false;
   let streamStarted = false;
-  let lastResponseSent = false;
+  let responseSent = false;
 
   const deepgramSocket = new WebSocket(
     "wss://api.deepgram.com/v1/listen?model=phonecall&encoding=mulaw&sample_rate=8000&punctuate=true",
@@ -90,31 +113,36 @@ wss.on("connection", (twilioSocket) => {
     }
 
     const transcript =
-      data.channel &&
-      data.channel.alternatives &&
-      data.channel.alternatives[0] &&
-      data.channel.alternatives[0].transcript;
+      data.channel?.alternatives?.[0]?.transcript;
 
-    if (transcript && transcript.length > 0 && !lastResponseSent) {
+    if (
+      transcript &&
+      transcript.length > 0 &&
+      !responseSent
+    ) {
+      responseSent = true;
+
       console.log("Caller said:", transcript);
 
       const aiResponse = decideResponse(transcript);
-      lastResponseSent = true;
+
+      const redirectUrl =
+        "/respond?" +
+        querystring.stringify({ message: aiResponse });
 
       /**
-       * Tell Twilio to speak back
-       * (we close the stream and respond verbally)
+       * Tell Twilio to redirect the call
        */
       twilioSocket.send(
         JSON.stringify({
-          event: "mark",
-          mark: {
-            name: aiResponse,
+          event: "redirect",
+          redirect: {
+            url: `https://variance-backend.onrender.com${redirectUrl}`,
           },
         })
       );
 
-      console.log("AI response decided:", aiResponse);
+      console.log("Redirecting to speak AI response");
     }
   });
 
@@ -133,7 +161,10 @@ wss.on("connection", (twilioSocket) => {
         streamStarted &&
         deepgramSocket.readyState === WebSocket.OPEN
       ) {
-        const audioBuffer = Buffer.from(data.media.payload, "base64");
+        const audioBuffer = Buffer.from(
+          data.media.payload,
+          "base64"
+        );
         deepgramSocket.send(audioBuffer);
       }
     } catch (err) {
