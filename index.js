@@ -1,185 +1,123 @@
 const express = require("express");
-const http = require("http");
-const WebSocket = require("ws");
-const querystring = require("querystring");
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+const twilio = require("twilio");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-/**
- * ========= TWILIO ENTRY POINT =========
- * Answers the call and starts streaming
- */
-app.post("/voice", (req, res) => {
-  console.log("Incoming call");
+const client = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
 
-  res.type("text/xml").send(`
-<Response>
-  <Say>
-    Hello. Before we begin, I am not an attorney,
-    and this call does not create an attorney client relationship.
-    Please tell me briefly how I can help you today.
-  </Say>
+const AUDIO_DIR = path.join(__dirname, "audio");
+if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR);
 
-  <Connect>
-    <Stream url="wss://variance-backend.onrender.com/stream" />
-  </Connect>
+/* =========================
+   SIMPLE AI BRAIN (TEMP)
+   ========================= */
+function decideResponse(text) {
+  const t = text.toLowerCase();
 
-  <Pause length="60" />
-</Response>
-  `);
-});
-
-/**
- * ========= AI VOICE RESPONSE =========
- * Speaks what the AI decided
- */
-app.post("/respond", (req, res) => {
-  const { message } = req.query;
-
-  console.log("AI speaking:", message);
-
-  res.type("text/xml").send(`
-<Response>
-  <Say>${message}</Say>
-  <Pause length="30" />
-</Response>
-  `);
-});
-
-/**
- * Health check
- */
-app.get("/", (req, res) => {
-  res.send("Backend is live.");
-});
-
-const PORT = process.env.PORT || 3000;
-const server = http.createServer(app);
-
-/**
- * ========= SIMPLE BRAIN =========
- */
-function decideResponse(transcript) {
-  const text = transcript.toLowerCase();
-
-  if (
-    text.includes("accident") ||
-    text.includes("crash") ||
-    text.includes("hit")
-  ) {
-    return "I am sorry that happened. Were you physically injured in the accident?";
+  if (t.includes("accident") || t.includes("crash") || t.includes("hit")) {
+    return "I’m sorry that happened. Were you physically injured in the accident?";
   }
 
   return "Thank you. What type of legal help are you looking for today?";
 }
 
-/**
- * ========= TWILIO MEDIA STREAM =========
- */
-const wss = new WebSocket.Server({
-  server,
-  path: "/stream",
-});
+/* =========================
+   AURA-2 TEXT → SPEECH
+   ========================= */
+async function generateAuraAudio(text, filename) {
+  const outputPath = path.join(AUDIO_DIR, filename);
 
-wss.on("connection", (twilioSocket) => {
-  console.log("Twilio stream connected");
-
-  let deepgramReady = false;
-  let streamStarted = false;
-  let responseSent = false;
-
-  const deepgramSocket = new WebSocket(
-    "wss://api.deepgram.com/v1/listen?model=phonecall&encoding=mulaw&sample_rate=8000&punctuate=true",
+  const response = await axios.post(
+    "https://api.deepgram.com/v1/speak?model=aura-2",
+    { text },
     {
       headers: {
         Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
+        "Content-Type": "application/json",
       },
+      responseType: "arraybuffer",
     }
   );
 
-  deepgramSocket.on("open", () => {
-    deepgramReady = true;
-    console.log("Deepgram connected");
-  });
+  fs.writeFileSync(outputPath, response.data);
+  return `${process.env.PUBLIC_BASE_URL}/audio/${filename}`;
+}
 
-  deepgramSocket.on("message", (message) => {
-    let data;
-    try {
-      data = JSON.parse(message.toString());
-    } catch {
-      return;
-    }
+/* =========================
+   TWILIO ENTRY POINT
+   ========================= */
+app.post("/voice", (req, res) => {
+  res.type("text/xml").send(`
+<Response>
+  <Say>
+    Hello. Before we begin, I am not an attorney,
+    and this call does not create an attorney client relationship.
+  </Say>
 
-    const transcript =
-      data.channel?.alternatives?.[0]?.transcript;
+  <Gather input="speech" action="/gather" method="POST" speechTimeout="auto">
+    <Say>Please tell me briefly how I can help you today.</Say>
+  </Gather>
 
-    if (
-      transcript &&
-      transcript.length > 0 &&
-      !responseSent
-    ) {
-      responseSent = true;
-
-      console.log("Caller said:", transcript);
-
-      const aiResponse = decideResponse(transcript);
-
-      const redirectUrl =
-        "/respond?" +
-        querystring.stringify({ message: aiResponse });
-
-      /**
-       * Tell Twilio to redirect the call
-       */
-      twilioSocket.send(
-        JSON.stringify({
-          event: "redirect",
-          redirect: {
-            url: `https://variance-backend.onrender.com${redirectUrl}`,
-          },
-        })
-      );
-
-      console.log("Redirecting to speak AI response");
-    }
-  });
-
-  twilioSocket.on("message", (message) => {
-    try {
-      const data = JSON.parse(message.toString());
-
-      if (data.event === "start") {
-        streamStarted = true;
-        console.log("Twilio stream started");
-      }
-
-      if (
-        data.event === "media" &&
-        deepgramReady &&
-        streamStarted &&
-        deepgramSocket.readyState === WebSocket.OPEN
-      ) {
-        const audioBuffer = Buffer.from(
-          data.media.payload,
-          "base64"
-        );
-        deepgramSocket.send(audioBuffer);
-      }
-    } catch (err) {
-      console.error("Twilio stream error:", err.message);
-    }
-  });
-
-  twilioSocket.on("close", () => {
-    if (deepgramSocket.readyState === WebSocket.OPEN) {
-      deepgramSocket.close();
-    }
-    console.log("Twilio stream disconnected");
-  });
+  <Say>Goodbye.</Say>
+</Response>
+  `);
 });
 
-server.listen(PORT, () => {
+/* =========================
+   HANDLE SPEECH → AI → VOICE
+   ========================= */
+app.post("/gather", async (req, res) => {
+  const speech = req.body.SpeechResult || "";
+  const callSid = req.body.CallSid;
+
+  console.log("Caller said:", speech);
+
+  const aiText = decideResponse(speech);
+  const audioFile = `response-${Date.now()}.wav`;
+
+  try {
+    const audioUrl = await generateAuraAudio(aiText, audioFile);
+
+    await client.calls(callSid).update({
+      twiml: `
+<Response>
+  <Play>${audioUrl}</Play>
+
+  <Gather input="speech" action="/gather" method="POST" speechTimeout="auto">
+    <Say>You can continue.</Say>
+  </Gather>
+</Response>
+      `,
+    });
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("Voice injection error:", err.message);
+    res.sendStatus(500);
+  }
+});
+
+/* =========================
+   SERVE AUDIO FILES
+   ========================= */
+app.use("/audio", express.static(AUDIO_DIR));
+
+/* =========================
+   HEALTH CHECK
+   ========================= */
+app.get("/", (req, res) => {
+  res.send("Aura-2 voice server is live.");
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
