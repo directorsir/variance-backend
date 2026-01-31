@@ -25,20 +25,22 @@ if (!fs.existsSync(AUDIO_DIR)) {
 }
 
 /* =========================
-   SIMPLE LAW-SAFE BRAIN
+   HUMAN-TUNED AI BRAIN
+   (speech-first wording)
    ========================= */
 function decideResponse(text) {
   const t = text.toLowerCase();
 
   if (t.includes("accident") || t.includes("crash") || t.includes("hit")) {
-    return "I’m sorry that happened. Were you physically injured in the accident?";
+    return "I’m really sorry that happened… Were you hurt at all?";
   }
 
-  return "Thank you. What type of legal help are you looking for today?";
+  return "Okay… what kind of legal help are you looking for?";
 }
 
 /* =========================
-   AURA-2 TEXT TO SPEECH
+   AURA-2 TEXT → SPEECH
+   (voice primed)
    ========================= */
 async function generateAuraAudio(text) {
   const filename = `response-${Date.now()}.wav`;
@@ -46,7 +48,15 @@ async function generateAuraAudio(text) {
 
   const response = await axios.post(
     "https://api.deepgram.com/v1/speak?model=aura-2",
-    { text },
+    {
+      text: `
+You are a calm, empathetic legal intake assistant speaking on the phone.
+Use natural pacing, short pauses, and a reassuring tone.
+Do not sound robotic. Do not rush.
+
+${text}
+      `
+    },
     {
       headers: {
         Authorization: `Token ${process.env.DEEPGRAM_API_KEY}`,
@@ -78,7 +88,9 @@ app.post("/voice", (req, res) => {
     method="POST"
     speechTimeout="auto"
   >
-    <Say>Please tell me briefly how I can help you today.</Say>
+    <Say>
+      Please tell me, in your own words, how I can help you today.
+    </Say>
   </Gather>
 
   <Say>Goodbye.</Say>
@@ -87,7 +99,7 @@ app.post("/voice", (req, res) => {
 });
 
 /* =========================
-   HANDLE SPEECH → AI → VOICE
+   SPEECH → AI → VOICE LOOP
    ========================= */
 app.post("/gather", async (req, res) => {
   const speech = req.body.SpeechResult || "";
@@ -99,7 +111,7 @@ app.post("/gather", async (req, res) => {
     const aiText = decideResponse(speech);
     const audioUrl = await generateAuraAudio(aiText);
 
-    // 🔑 IMPORTANT: REST CALL CONTROLS THE CALL
+    // 🔑 REST CALL IS THE ONLY CALL CONTROLLER
     await client.calls(callSid).update({
       twiml: `
 <Response>
@@ -111,17 +123,17 @@ app.post("/gather", async (req, res) => {
     method="POST"
     speechTimeout="auto"
   >
-    <Say>You can continue.</Say>
+    <Say>Take your time.</Say>
   </Gather>
 </Response>
       `,
     });
 
-    // 🔑 IMPORTANT: return EMPTY 200 — NO TWIML
+    // 🔑 MUST RETURN EMPTY 200
     res.sendStatus(200);
 
   } catch (err) {
-    console.error("Error handling gather:", err.message);
+    console.error("Gather error:", err.message);
     res.sendStatus(500);
   }
 });
@@ -135,7 +147,7 @@ app.use("/audio", express.static(AUDIO_DIR));
    HEALTH CHECK
    ========================= */
 app.get("/", (req, res) => {
-  res.send("Aura-2 voice server is live.");
+  res.send("Aura-2 human-tuned voice server is live.");
 });
 
 /* =========================
