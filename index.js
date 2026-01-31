@@ -8,16 +8,24 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+/* =========================
+   TWILIO CLIENT
+   ========================= */
 const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
 
+/* =========================
+   AUDIO STORAGE
+   ========================= */
 const AUDIO_DIR = path.join(__dirname, "audio");
-if (!fs.existsSync(AUDIO_DIR)) fs.mkdirSync(AUDIO_DIR);
+if (!fs.existsSync(AUDIO_DIR)) {
+  fs.mkdirSync(AUDIO_DIR);
+}
 
 /* =========================
-   SIMPLE AI BRAIN (TEMP)
+   SIMPLE LAW-SAFE BRAIN
    ========================= */
 function decideResponse(text) {
   const t = text.toLowerCase();
@@ -30,10 +38,11 @@ function decideResponse(text) {
 }
 
 /* =========================
-   AURA-2 TEXT → SPEECH
+   AURA-2 TEXT TO SPEECH
    ========================= */
-async function generateAuraAudio(text, filename) {
-  const outputPath = path.join(AUDIO_DIR, filename);
+async function generateAuraAudio(text) {
+  const filename = `response-${Date.now()}.wav`;
+  const filePath = path.join(AUDIO_DIR, filename);
 
   const response = await axios.post(
     "https://api.deepgram.com/v1/speak?model=aura-2",
@@ -47,7 +56,8 @@ async function generateAuraAudio(text, filename) {
     }
   );
 
-  fs.writeFileSync(outputPath, response.data);
+  fs.writeFileSync(filePath, response.data);
+
   return `${process.env.PUBLIC_BASE_URL}/audio/${filename}`;
 }
 
@@ -62,7 +72,12 @@ app.post("/voice", (req, res) => {
     and this call does not create an attorney client relationship.
   </Say>
 
-  <Gather input="speech" action="/gather" method="POST" speechTimeout="auto">
+  <Gather
+    input="speech"
+    action="/gather"
+    method="POST"
+    speechTimeout="auto"
+  >
     <Say>Please tell me briefly how I can help you today.</Say>
   </Gather>
 
@@ -80,27 +95,33 @@ app.post("/gather", async (req, res) => {
 
   console.log("Caller said:", speech);
 
-  const aiText = decideResponse(speech);
-  const audioFile = `response-${Date.now()}.wav`;
-
   try {
-    const audioUrl = await generateAuraAudio(aiText, audioFile);
+    const aiText = decideResponse(speech);
+    const audioUrl = await generateAuraAudio(aiText);
 
+    // 🔑 IMPORTANT: REST CALL CONTROLS THE CALL
     await client.calls(callSid).update({
       twiml: `
 <Response>
   <Play>${audioUrl}</Play>
 
-  <Gather input="speech" action="/gather" method="POST" speechTimeout="auto">
+  <Gather
+    input="speech"
+    action="/gather"
+    method="POST"
+    speechTimeout="auto"
+  >
     <Say>You can continue.</Say>
   </Gather>
 </Response>
       `,
     });
 
+    // 🔑 IMPORTANT: return EMPTY 200 — NO TWIML
     res.sendStatus(200);
+
   } catch (err) {
-    console.error("Voice injection error:", err.message);
+    console.error("Error handling gather:", err.message);
     res.sendStatus(500);
   }
 });
@@ -117,6 +138,9 @@ app.get("/", (req, res) => {
   res.send("Aura-2 voice server is live.");
 });
 
+/* =========================
+   START SERVER
+   ========================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
